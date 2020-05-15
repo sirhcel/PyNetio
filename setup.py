@@ -14,7 +14,6 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/netioproducts/PyNetio",
     install_requires=[
-        "PyYAML>=5.3",
         "requests>=2.23",
         "pyOpenSSL>=19.0"
     ],
