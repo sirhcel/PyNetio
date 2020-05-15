@@ -70,7 +70,7 @@ def load_config(args):
     return args
 
 
-def main(args):
+def cli_app(args):
     """ Main entry point of the app """
 
     args = load_config(args)
@@ -107,7 +107,7 @@ def command_get(device: Netio, args: argparse.Namespace) -> None:
         print(o.ID, o.Name, o.State, o.Action, o.Delay, o.Current, o.PowerFactor, o.Load, o.Energy, sep=args.delim)
 
 
-if __name__ == "__main__":
+def cli_main(argv):
     parser = argparse.ArgumentParser(epilog=EPILOG)  # prog='netio')
 
     parser.add_argument('device', metavar='DEVICE', action='store', help='Netio device URL')
@@ -146,4 +146,12 @@ if __name__ == "__main__":
     info_parser.set_defaults(func=lambda d, x: print("info_command"))
 
     args = parser.parse_args()
-    main(args)
+    cli_app(args)
+
+
+def main():
+    cli_main(sys.argv)
+
+
+if __name__ == "__main__":
+    main()
