@@ -1,11 +1,14 @@
 from . import Netio
+from distutils.util import strtobool
 from pathlib import Path
+from urllib.parse import urljoin
 import argparse
+import configparser
+import getpass
 import itertools
 import os
 import requests
 import sys
-import yaml
 
 
 def add_output_actions_for_arg(actions, arg, action):
@@ -14,28 +17,39 @@ def add_output_actions_for_arg(actions, arg, action):
             actions[item] = action
 
 
+def bool_or_str(string):
+    try:
+        return bool(strtobool(string.lower()))
+    except ValueError:
+        return string
+
+
 def create_argument_parser():
-    default_config = os.getenv('NETIO_CONFIG', 'netio.yml')
+    default_config = os.getenv('NETIO_CONFIG', 'netio.ini')
 
     parser = argparse.ArgumentParser(description='NETIO command line tool',
-        epilog='There is explicitly no support for specifying the device password '
-            'via command line arguments for not having it ending up in history '
-            'and process listings. Please use a configuration file. See '
-            '\'netio.yml.example\' for an example.'
-            'You may specify the default configuration file in the environment '
-            'variable NETIO_CONFIG.')
-    parser.add_argument('--config', type=Path, default=default_config,
-        help='YAML configuration for device name, certificate and password (default is {})'.format(default_config))
+        epilog= 'You may specify the default configuration file in the '
+            'environment variable NETIO_CONFIG.')
+    parser.add_argument('-c', '--config', type=Path, default=default_config,
+        help='configuration file (default is {})'.format(default_config))
+
+    parser.add_argument('-d', '--device', default=None,
+        help='the NETIO device to interact with')
+    parser.add_argument('-u', '--user', default=None,
+        help='user name for accessing device')
+    parser.add_argument('-p', '--password-prompt', action='store_true',
+        help='prompt for password')
+    parser.add_argument('--verify', default=None,
+        help='your root of trust for certificate verification, this could be a self-signed certificate')
+    parser.add_argument('--no-urllib-warnings', action='store_true', default=None,
+        help='disable warnings about certificate properties')
+
     parser.add_argument('--verbose', action='store_true',
         help='be verbose (e.g. print column headers)')
     subparsers = parser.add_subparsers(metavar='COMMAND', help='sub commands')
 
     get_parser = subparsers.add_parser('get', help='get outputs')
     get_parser.set_defaults(function=get_command)
-    get_parser.add_argument('-d', '--delimiter', metavar='DELIMITER',
-        default='\t',
-        help='output delimiter (default: tab)')
-
     get_parser.add_argument('outputs', metavar='OUTPUTS', type=int,
         action='append', nargs='*',
         help='outputs to get status for')
@@ -77,8 +91,41 @@ def flatten(iterable):
     return itertools.chain.from_iterable(iterable)
 
 
+def merge_config_into_args(args, config):
+    # Select the config file section to take the values from. Configparser
+    # automagically merges values from 'DEFAULT into the selected section if it
+    # is not present there.
+    section_name = args.device if args.device in config.sections() else 'DEFAULT'
+    section = config[section_name]
+
+    # Update values not specified via command line arguments.
+    if args.device == None:
+        args.device = section.get('device', None)
+    if args.user == None:
+        args.user = section.get('user', None)
+    if args.verify == None:
+        args.verify = section.get('verify', None)
+    if args.no_urllib_warnings == None:
+        args.no_urllib_warnings = section.get('no_urllib_warnings', None)
+
+    # Store password in an additional argument variable.
+    args.password = section.get('password', None)
+
+
 def program_name():
     return os.path.basename(sys.argv[0])
+
+
+def resolve_config_path(config, path):
+    config = Path(config)
+    path = Path(path)
+    result = path
+
+    if not path.is_absolute():
+        result = config.parent / path
+
+    return result
+
 
 
 
@@ -132,31 +179,45 @@ def netio_cli(argv):
     parser = create_argument_parser()
     args = parser.parse_args(argv[1:])
 
-    # TOOD: Is there some config-ish format supported by Python's standard
-    # library?
-    with args.config.open() as f:
-        config = yaml.load(f)
+    config = configparser.ConfigParser()
+    config.read(args.config)
 
-    if config.get('disable_urllib_warnings', False):
-        # Disable warnings about certificate's subjectAltName versus commonName
-        # entry.
+    verify_from_args = args.verify != None
+    merge_config_into_args(args, config)
+
+    # The 'verify' argument for configuring certificate verification is
+    # versatile. It may be either a bool or a string with the following
+    # meanings:
+    #
+    #     True: use default root of trust
+    #
+    #     False: disable certificate verification (you have been warned: here
+    #     be dragons!)
+    #
+    #     a string: file or diretory name for a custom root of trust
+    #
+    # So handling this parameter requires some extra care.
+    args.verify = bool_or_str(args.verify)
+    if not verify_from_args and type(args.verify) == str:
+        args.verify = resolve_config_path(args.config, args.verify)
+
+    if args.no_urllib_warnings:
+        # Disable urllib's warnings to get rid of warnings about certificate's
+        # subjectAltName versus commonName.
         requests.packages.urllib3.disable_warnings()
 
+    if args.password_prompt:
+        # Prompt for passwor upon request only for not blocking in scripting.
+        args.password = getpass.getpass(prompt='password: ')
 
-    protocol = config.get('protocol', 'https')
-    cert = None
 
-    if protocol == 'https':
-        # If the certificate is given as a relative path. Its position is assumed
-        # relative to the config file.
-        cert = Path(config['cert'])
-        if not cert.is_absolute():
-            cert = args.config.parent / cert
+    # FIXME: Check for missing arguments not covered by ArgumentParser's checks
+    # due to config file merging.
 
-    url = '{}://{}/netio.json'.format(protocol, config['device'])
-    auth = (config.get('user', 'write'), config['password'])
-    device = Netio(url, auth_rw=auth, verify=cert)
 
+    url = urljoin(args.device, 'netio.json')
+    auth = (args.user, args.password)
+    device = Netio(url, auth_rw=auth, verify=args.verify)
 
     if hasattr(args, 'function'):
         args.function(device, args)
