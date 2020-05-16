@@ -32,8 +32,12 @@ def create_argument_parser():
 
     get_parser = subparsers.add_parser('get', help='get outputs')
     get_parser.set_defaults(function=get_command)
+    get_parser.add_argument('-d', '--delimiter', metavar='DELIMITER',
+        default='\t',
+        help='output delimiter (default: tab)')
+
     get_parser.add_argument('outputs', metavar='OUTPUTS', type=int,
-        action='append', nargs='+',
+        action='append', nargs='*',
         help='outputs to get status for')
 
     set_parser = subparsers.add_parser('set', help='set outputs')
@@ -86,7 +90,12 @@ def get_command(device, args):
     """
     requested_ids = set(flatten(args.outputs))
     all_outputs = device.get_outputs()
-    requested_outputs = [o for o in all_outputs if o.ID in requested_ids]
+
+    if len(requested_ids) > 0:
+        requested_outputs = [o for o in all_outputs if o.ID in requested_ids]
+    else:
+        requested_outputs = all_outputs
+
     line_format = '{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}'
 
     if args.verbose:
